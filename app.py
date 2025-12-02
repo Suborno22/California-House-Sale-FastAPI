@@ -13,10 +13,10 @@ from sklearn.preprocessing import StandardScaler, FunctionTransformer
 import pandas as pd
 from typing import List
 import sys
-import os
+from io import BytesIO
+from huggingface_hub import hf_hub_download
 
 # CRITICAL: Define these functions BEFORE loading the model!
-# They need to be in the global namespace for unpickling to work
 def column_ratio(X):
     """This needs to be at module level for pickle to find it"""
     return X[:, [0]] / X[:, [1]]
@@ -26,12 +26,10 @@ def ratio_name(function_transformer, feature_names_in):
     return ["ratio"]
 
 # PICKLE FIX: Add these functions to __mp_main__ module
-# This fixes the unpickling error!
 if '__mp_main__' not in sys.modules:
     sys.modules['__mp_main__'] = sys.modules[__name__]
 sys.modules['__mp_main__'].column_ratio = column_ratio
 sys.modules['__mp_main__'].ratio_name = ratio_name
-sys.modules['__mp_main__'].ClusterSimilarity = None  # Will define below
 
 # Your custom transformer - must be defined before model loading!
 class ClusterSimilarity(BaseEstimator, TransformerMixin):
@@ -51,16 +49,8 @@ class ClusterSimilarity(BaseEstimator, TransformerMixin):
     def get_feature_names_out(self, names=None):
         return [f"Cluster {i} Similarity" for i in range(self.n_clusters)]
 
-# Update the __mp_main__ reference with the actual class
+# Update the __mp_main__ reference
 sys.modules['__mp_main__'].ClusterSimilarity = ClusterSimilarity
-
-def ratio_pipeline():
-    """Helper function to create ratio pipeline"""
-    return make_pipeline(
-        SimpleImputer(strategy="median"),
-        FunctionTransformer(column_ratio, feature_names_out=ratio_name),
-        StandardScaler()
-    )
 
 # Global variable for the model
 model = None
@@ -71,20 +61,16 @@ async def lifespan(app: FastAPI):
     # Startup: Load the model
     global model
     try:
-        model_path = "california_housing_model.pkl"
         
-        # Check if file exists
-        if not os.path.exists(model_path):
-            print(f"Madone! Model file not found at: {os.path.abspath(model_path)}")
-            print(f"Looking in directory: {os.getcwd()}")
-            print(f"Files here: {os.listdir('.')}")
-        else:
-            print(f"Loading model from: {os.path.abspath(model_path)}")
-            model = joblib.load(model_path)
-            print("Model loaded successfully! Now we're cookin' with gas!")
-        
+        # In the lifespan function:
+        model_path = hf_hub_download(
+            repo_id="Suborno99/california-housing-price-prediction-model",
+            filename="california_housing_model.pkl"
+        )
+        model = joblib.load(model_path)
+            
     except Exception as e:
-        print(f"Eh, we got a problem loading the model: {str(e)}")
+        print(f"We got a problem loading the model: {str(e)}")
         print(f"Error type: {type(e).__name__}")
         import traceback
         traceback.print_exc()
@@ -93,7 +79,7 @@ async def lifespan(app: FastAPI):
     yield  # Server is running
     
     # Shutdown: cleanup if needed
-    print("Shuttin' down... arrivederci!")
+    print("Shuttin' down... !")
 
 # Initialize FastAPI with lifespan
 app = FastAPI(
@@ -101,7 +87,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS - so your React app don't get blocked, ya understand?
+# CORS - so your React app don't get blocked
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, specify your domain!
@@ -110,8 +96,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global variable for the model
-model = None
+# Pydantic models
 class HousingData(BaseModel):
     longitude: float = Field(..., description="Longitude coordinate")
     latitude: float = Field(..., description="Latitude coordinate")
@@ -141,21 +126,6 @@ class HousingData(BaseModel):
 class PredictionResponse(BaseModel):
     predictions: List[float]
     count: int
-
-# Initialize FastAPI with lifespan
-app = FastAPI(
-    title="California Housing Price Predictor",
-    lifespan=lifespan
-)
-
-# CORS - so your React app don't get blocked, ya understand?
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your domain!
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.get("/")
 async def root():
@@ -193,7 +163,7 @@ async def predict(data: List[HousingData]):
         )
     
     try:
-        # Convert to DataFrame - just like in your original code
+        # Convert to DataFrame
         df = pd.DataFrame([item.model_dump() for item in data])
         
         # Make predictions
@@ -223,13 +193,13 @@ async def predict_single(data: HousingData):
         )
     
     try:
-        df = pd.DataFrame([data.dict()])
+        df = pd.DataFrame([data.model_dump()])
         prediction = model.predict(df)
         
         return {
             "prediction": float(prediction[0]),
             "prediction_dollars": float(prediction[0] * 100000),
-            "input_data": data.dict()
+            "input_data": data.model_dump()
         }
     
     except Exception as e:
