@@ -15,6 +15,7 @@ from typing import List
 import sys
 from io import BytesIO
 from huggingface_hub import hf_hub_download
+import uvicorn, os
 
 # CRITICAL: Define these functions BEFORE loading the model!
 def column_ratio(X):
@@ -211,7 +212,7 @@ async def predict_single(data: HousingData):
             detail=f"Prediction failed: {str(e)}"
         )
 
-# Run with: uvicorn app:app --reload
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
